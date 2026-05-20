@@ -1,0 +1,20 @@
+# 全局配置
+llm:
+  provider: deepseek
+  api_key: "${DEEPSEEK_API_KEY}"
+  model: deepseek-chat
+  base_url: https://api.deepseek.com
+
+image:
+  provider: tongyi
+  api_key: "${TONYI_API_KEY}"
+  model: wanx-v1
+  daily_free: 50
+
+tts:
+  provider: edge
+
+video:
+  fps: 24
+  resolution: [1920, 1080]
+  bgm_dir: ./data/bgm_library

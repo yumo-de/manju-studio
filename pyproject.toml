@@ -1,0 +1,27 @@
+[project]
+name = "manju-studio"
+version = "0.1.0"
+description = "漫剧生成系统 - From story to video"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "edge-tts>=6.0",
+    "moviepy>=2.0",
+    "gradio>=5.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.setuptools.packages.find]
+include = ["manju*", "manju.*"]
+
+[build-system]
+requires = ["setuptools>=64.0"]
+build-backend = "setuptools.build_meta"
