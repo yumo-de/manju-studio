@@ -8,7 +8,7 @@ llm:
 image:
   provider: tongyi
   api_key: "${TONYI_API_KEY}"
-  model: wanx-v1
+  model: wan2.7-image-pro
   daily_free: 50
 
 tts:
