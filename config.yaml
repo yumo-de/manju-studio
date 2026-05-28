@@ -10,6 +10,10 @@ image:
   api_key: "${TONYI_API_KEY}"
   model: wan2.7-image-pro
   daily_free: 50
+  cache:
+    enabled: true
+    dir: data/image_cache
+    max_entries: 500
 
 tts:
   provider: edge
@@ -18,3 +22,16 @@ video:
   fps: 24
   resolution: [1920, 1080]
   bgm_dir: ./data/bgm_library
+  interpolation:
+    enabled: false      # 默认关闭（打开后每次合成会额外耗时）
+    target_fps: 60
+    method: minterpolate  # minterpolate（免费）或 rife（需 rife-ncnn-vulkan）
+    rife_binary: ""
+  subtitles:
+    font_name: "Noto Sans SC"
+    font_size: 24
+    font_color: "#FFFFFF"      # 白色
+    outline_color: "#000000"   # 黑色描边
+    outline_width: 2
+    bold: false
+    alignment: 2               # 2=底部居中, 6=顶部居中, 8=底部右对齐

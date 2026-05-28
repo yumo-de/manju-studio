@@ -14,6 +14,7 @@ from typing import Any
 import requests
 
 from manju.config import load_config
+from manju.visual.cache import ImageCache
 
 
 class TongyiImageClient:
@@ -27,12 +28,14 @@ class TongyiImageClient:
     Args:
         api_key: 可选，直接传入 API Key，不传则从配置读取。
         base_url: API 基础地址。
+        use_cache: 是否启用缓存（默认从 config.image.cache.enabled 读取）。
     """
 
     def __init__(
         self,
         api_key: str | None = None,
         base_url: str = "https://dashscope.aliyuncs.com/api/v1",
+        use_cache: bool | None = None,
     ) -> None:
         config = load_config()
         self.api_key = api_key or config.get("image", {}).get("api_key", "")
@@ -52,6 +55,17 @@ class TongyiImageClient:
                 "Content-Type": "application/json",
             }
         )
+
+        # 本地缓存
+        cache_cfg = config.get("image", {}).get("cache", {})
+        enabled = cache_cfg.get("enabled", True) if use_cache is None else use_cache
+        if enabled:
+            self._cache = ImageCache(
+                cache_dir=cache_cfg.get("dir", "data/image_cache"),
+                max_entries=cache_cfg.get("max_entries", 500),
+            )
+        else:
+            self._cache = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -88,6 +102,48 @@ class TongyiImageClient:
             return self._async_call(payload)
         else:
             return [f"task:{self._submit_async(payload)}"]
+
+    def generate_cached(
+        self,
+        prompt: str,
+        size: str = "2K",
+        output_dir: str = "data/image_cache",
+        filename: str = "",
+    ) -> list[str]:
+        """带缓存的文生图。
+
+        先检查本地缓存（按 prompt + model + size 的 hash 索引），
+        命中则跳过 API 调用直接返回本地文件路径；
+        未命中则调用通义万相 -> 下载 -> 写入缓存。
+
+        Returns:
+            本地文件路径列表。
+        """
+        if self._cache is None:
+            urls = self.generate(prompt, size=size, n=1)
+            if not urls:
+                return []
+            out_dir = Path(output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / (filename or f"{hash(prompt)}.png")
+            self.download(urls[0], out_path)
+            return [str(out_path)]
+
+        result = self._cache.get(prompt, self.model, size)
+        if result is not None:
+            return [result]
+
+        urls = self.generate(prompt, size=size, n=1)
+        if not urls:
+            return []
+
+        out_dir = Path(output_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / (filename or f"{hash(prompt)}.png")
+        self.download(urls[0], out_path)
+
+        cached_path = self._cache.put(prompt, self.model, size, str(out_path))
+        return [cached_path]
 
     def download(self, url: str, output_path: Path) -> Path:
         """下载图片到本地文件。

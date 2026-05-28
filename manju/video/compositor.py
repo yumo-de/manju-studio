@@ -344,21 +344,65 @@ class VideoCompositor:
         video_path: str,
         subtitles: List[dict],
         output_path: str,
+        style: Optional[dict] = None,
     ) -> str:
-        """Burn subtitles into a video.
+        """Burn subtitles into a video with optional styling.
 
         *subtitles* is a list of dicts with keys: ``start``, ``end`` (both in
         seconds), and ``text``.  An SRT file is generated and burnt in with the
         ``subtitles`` ffmpeg filter.
 
+        *style* (optional) can contain:
+          - ``font_name``: font family name (default: "Noto Sans SC")
+          - ``font_size``: font size (default: 24)
+          - ``font_color``: hex color like ``#FFFFFF`` (default: white)
+          - ``outline_color``: hex color for outline (default: black)
+          - ``outline_width``: outline width in pixels (default: 1)
+          - ``bold``: bool (default: false)
+          - ``alignment``: 2=bottom center, 6=top center, 8=bottom right
+
         Args:
             video_path: Input video file.
             subtitles: List of subtitle dicts.
             output_path: Output video file with burnt-in subtitles.
+            style: Optional subtitle style overrides.
 
         Returns:
             *output_path* for chaining.
         """
+        # Default style
+        style_opts = {
+            "font_name": "Noto Sans SC",
+            "font_size": 24,
+            "font_color": "#FFFFFF",
+            "outline_color": "#000000",
+            "outline_width": 1,
+            "bold": False,
+            "alignment": 2,
+        }
+        if style:
+            style_opts.update(style)
+
+        # Convert hex color #RRGGBB to ASS BBGGRR format
+        def _hex_to_ass(h: str) -> str:
+            h = h.lstrip("#")
+            if len(h) == 6:
+                return f"&H00{h[4:6]}{h[2:4]}{h[0:2]}"
+            if len(h) == 8:
+                return f"&H{h[6:8]}{h[4:6]}{h[2:4]}{h[0:2]}"
+            return "&H00FFFFFF"
+
+        # Build force_style string
+        force_style = (
+            f"FontName={style_opts['font_name']},"
+            f"FontSize={style_opts['font_size']},"
+            f"PrimaryColour={_hex_to_ass(style_opts['font_color'])},"
+            f"OutlineColour={_hex_to_ass(style_opts['outline_color'])},"
+            f"Outline={style_opts['outline_width']},"
+            f"Bold={1 if style_opts['bold'] else 0},"
+            f"Alignment={style_opts['alignment']}"
+        )
+
         # Write temporary SRT file
         srt_lines = []
         for idx, sub in enumerate(subtitles, start=1):
@@ -377,12 +421,11 @@ class VideoCompositor:
             f.write("\n".join(srt_lines))
 
         try:
-            # Burn subtitles with the subtitles filter.
-            # Escape special chars in the srt path for ffmpeg.
+            # Burn subtitles with the subtitles filter + force_style.
             escaped_path = srt_path.replace("\\", "\\\\").replace(":", "\\:")
             cmd = [
                 "-i", video_path,
-                "-vf", f"subtitles={escaped_path}",
+                "-vf", f"subtitles={escaped_path}:force_style='{force_style}'",
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
                 "-c:a", "copy",

@@ -344,7 +344,11 @@ class ManjuPipeline:
                 def _gen_one(task: dict) -> tuple[str, str | int] | None:
                     """生成单张图片，返回 (type_key, path) or None。"""
                     try:
-                        urls = self.image_client.generate(task["prompt"], n=1)
+                        urls = self.image_client.generate_cached(
+                            task["prompt"], size="2K",
+                            output_dir=str(task["output_dir"]),
+                            filename=task["filename"],
+                        )
                         if not urls:
                             return None
                         out_path = task["output_dir"] / task["filename"]
@@ -660,8 +664,13 @@ def _build_act_clip(
     video_dir: Path,
     shot_image_map: dict[int, str],
     comp,
+    transitions: list[str] | None = None,
 ) -> str | None:
-    """为单幕生成视频片段，返回视频路径。"""
+    """为单幕生成视频片段，返回视频路径。
+
+    如果提供了 transitions 列表，在镜头之间应用转场效果。
+    transitions 长度应等于 (clip_count - 1)。
+    """
     clip_paths = []
     for shot in act_shots:
         img_path = shot_image_map.get(shot.shot_id)
@@ -679,8 +688,28 @@ def _build_act_clip(
         return None
 
     act_video = str(video_dir / f"act_{act_index:04d}.mp4")
-    comp.concatenate_clips(clip_paths, act_video)
+    comp.concatenate_clips(clip_paths, act_video, transitions=transitions)
     return act_video
+
+
+def _compute_shot_transitions(shots: list) -> list[str]:
+    """根据镜头情绪变化自动编排转场列表。
+
+    返回的列表长度 = len(shots) - 1（每对相邻镜头之间一个转场）。
+    如果镜头数 < 2，返回空列表。
+    """
+    from manju.video.effects import pick_transition_between
+
+    if len(shots) < 2:
+        return []
+
+    transitions: list[str] = []
+    for i in range(len(shots) - 1):
+        prev_mood = getattr(shots[i], "bgm_mood", "") or ""
+        next_mood = getattr(shots[i + 1], "bgm_mood", "") or ""
+        t = pick_transition_between(prev_mood, next_mood)
+        transitions.append(t)
+    return transitions
 
 
 # 模块级 compositor 实例（供视频合成函数使用）
@@ -701,10 +730,11 @@ def compose_video_by_acts(
     bgm_path: str | None,
     subtitle_entries: list[dict],
 ) -> str:
-    """按幕(Act)多线程生成视频，最后拼接。"""
+    """按幕(Act)多线程生成视频，最后拼接."""
     import logging
     logger = logging.getLogger("pipeline.compose")
     comp = VideoCompositor()
+    interpolator = _get_interpolator()
 
     # 将 shots 按 act 分组
     act_scenes = {i: set(a.scenes) for i, a in enumerate(story.acts)}
@@ -723,16 +753,19 @@ def compose_video_by_acts(
 
     logger.info("按幕分组: %s", {k: len(v) for k, v in act_shots.items()})
 
-    # 多线程生成每幕视频
+    # 多线程生成每幕视频（带转场）
     act_videos: dict[int, str | None] = {}
     with ThreadPoolExecutor(max_workers=len(act_shots)) as pool:
         futures = {}
         for act_idx, act_shot_list in act_shots.items():
             if not act_shot_list:
                 continue
+            # 计算本幕内镜头间的转场
+            shot_transitions = _compute_shot_transitions(act_shot_list)
             future = pool.submit(
                 _build_act_clip,
                 act_shot_list, act_idx, keyframe_dir, video_dir, {}, comp,
+                shot_transitions,
             )
             futures[future] = act_idx
 
@@ -765,9 +798,19 @@ def compose_video_by_acts(
     # 添加字幕
     if subtitle_entries:
         final = str(video_dir / "final.mp4")
-        comp.add_subtitles(video_with_audio, subtitle_entries, final)
+        comp.add_subtitles(video_with_audio, subtitle_entries, final,
+                           style=_get_subtitle_style())
     else:
         final = video_with_audio
+
+    # 帧率插值（如果启用）
+    if interpolator is not None:
+        try:
+            final_interpolated = str(video_dir / "final_60fps.mp4")
+            interpolator.interpolate(final, final_interpolated)
+            final = final_interpolated
+        except Exception as e:
+            logger.warning("帧率插值失败（跳过）: %s", e)
 
     return final
 
@@ -784,6 +827,7 @@ def compose_video_flat(
     import logging
     logger = logging.getLogger("pipeline.compose")
     comp = VideoCompositor()
+    interpolator = _get_interpolator()
 
     clip_paths = []
     for shot in shots:
@@ -808,7 +852,47 @@ def compose_video_flat(
     if video_with_audio is None:
         video_with_audio = raw
 
+    # 帧率插值（如果启用）
+    if interpolator is not None:
+        try:
+            final_interpolated = str(video_dir / "final_60fps.mp4")
+            interpolator.interpolate(video_with_audio, final_interpolated)
+            return final_interpolated
+        except Exception as e:
+            logger.warning("帧率插值失败（跳过）: %s", e)
+
     return video_with_audio
+
+
+def _get_interpolator():
+    """根据配置创建 FrameInterpolator 实例。若未启用则返回 None。"""
+    from manju.config import load_config
+    from manju.video.interpolator import FrameInterpolator
+
+    cfg = load_config().get("video", {}).get("interpolation", {})
+    if not cfg.get("enabled", False):
+        return None
+    return FrameInterpolator(
+        target_fps=cfg.get("target_fps", 60),
+        method=cfg.get("method", "minterpolate"),
+        rife_binary=cfg.get("rife_binary", ""),
+    )
+
+
+def _get_subtitle_style() -> dict:
+    """从配置读取字幕样式。"""
+    from manju.config import load_config
+
+    cfg = load_config().get("video", {}).get("subtitles", {})
+    return {
+        "font_name": cfg.get("font_name", "Noto Sans SC"),
+        "font_size": cfg.get("font_size", 24),
+        "font_color": cfg.get("font_color", "#FFFFFF"),
+        "outline_color": cfg.get("outline_color", "#000000"),
+        "outline_width": cfg.get("outline_width", 1),
+        "bold": cfg.get("bold", False),
+        "alignment": cfg.get("alignment", 2),
+    }
 
 
 def _add_audio_to_video(
