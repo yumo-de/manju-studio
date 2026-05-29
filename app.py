@@ -137,6 +137,11 @@ with gr.Blocks(title="漫剧工作室") as demo:
     # ======== 步骤 3 ========
     with gr.Column(visible=False) as panel_3:
         gr.Markdown("### 🎥 步骤 3：分镜头")
+        with gr.Row():
+            step3_scene_count = gr.Number(label="使用前 N 个场景", value=0, precision=0,
+                                          info="0 = 全部场景")
+            step3_shots_per_scene = gr.Number(label="每场景镜头数", value=5, precision=0,
+                                              minimum=1, maximum=15)
         step3_preview = gr.Markdown("等待生成...")
         step3_btn = gr.Button("✨ 生成全部分镜头", variant="primary", size="sm")
         step3_status = gr.Markdown("")
@@ -272,29 +277,50 @@ with gr.Blocks(title="漫剧工作室") as demo:
     # 步骤 3
     # =====================================================================
 
-    def s3_gen(proj):
+    def s3_gen_start():
+        """立即显示加载状态，让用户知道正在生成。"""
+        return [gr.update(value="⏳ 正在生成全部分镜头（调用 AI 中，请耐心等待 1-2 分钟）...",
+                           visible=True),
+                gr.update(value="⏳ 正在生成全部分镜头..."),
+                gr.update(interactive=False)]
+
+    def s3_gen(proj, scene_count, shots_per_scene):
         if not proj:
-            return [gr.update(), gr.update(value="请先完成步骤1"), gr.update(), gr.update()]
+            return [gr.update(), gr.update(value="请先完成步骤1"), gr.update(),
+                    gr.update(), gr.update(interactive=True)]
         try:
             sd = read_json(f"{proj}/story.json")
             sc = read_json(f"{proj}/scenes.json")
             story = Story(**sd)
-            sb = pipeline.shot_generator.generate(story, sc)
+            # 按场景数裁剪
+            n_scenes = len(sc)
+            count = int(scene_count) if scene_count else 0
+            if count > 0 and count < n_scenes:
+                sc = sc[:count]
+                used_n = count
+            else:
+                used_n = n_scenes
+            sps = int(shots_per_scene) if shots_per_scene else 5
+            sb = pipeline.shot_generator.generate(story, sc, shots_per_scene=sps)
             js = sb.model_dump_json(indent=2, ensure_ascii=False)
             write_json(f"{proj}/storyboard.json", json.loads(js))
             shots = sb.shots
             dur = sum(s.duration for s in shots)
-            prev = f"🎥 **{len(shots)}** 个镜头，约 **{dur}秒**\n\n" + "\n".join(f"- **#{s.shot_id}** [{s.camera.type}/{s.camera.move}] {s.description[:30]}..." for s in shots[:5])
+            prev = f"🎥 **{len(shots)}** 个镜头，约 **{dur}秒**（{used_n} 个场景 × ~{sps} 镜头）\n\n" + "\n".join(f"- **#{s.shot_id}** [{s.camera.type}/{s.camera.move}] {s.description[:30]}..." for s in shots[:5])
             if len(shots) > 5:
                 prev += f"\n- ... 还有 {len(shots)-5} 个镜头"
             return [gr.update(value=js, visible=True),
                     gr.update(value=f"✅ 共 {len(shots)} 个镜头，{dur}s"),
-                    gr.update(value=prev), gr.update(visible=True)]
+                    gr.update(value=prev), gr.update(visible=True),
+                    gr.update(interactive=True, value="✨ 生成全部分镜头")]
         except Exception as e:
-            return [gr.update(), gr.update(value=f"❌ {e}"), gr.update(), gr.update()]
+            return [gr.update(), gr.update(value=f"❌ {e}"), gr.update(),
+                    gr.update(), gr.update(interactive=True, value="✨ 生成全部分镜头")]
 
-    step3_btn.click(fn=s3_gen, inputs=[proj_dir],
-                    outputs=[step3_editor, step3_status, step3_preview, step3_confirm])
+    step3_btn.click(fn=s3_gen_start,
+                    outputs=[step3_preview, step3_status, step3_btn]
+                    ).then(fn=s3_gen, inputs=[proj_dir, step3_scene_count, step3_shots_per_scene],
+                           outputs=[step3_editor, step3_status, step3_preview, step3_confirm, step3_btn])
 
     def s3_confirm(proj, js, cur, sts):
         data = json.loads(js)

@@ -122,6 +122,7 @@ def _process_one_scene(
     scene: dict[str, Any],
     consistency_context: str,
     shot_counter_start: int,
+    shots_per_scene: int = 5,
 ) -> list[Shot]:
     """处理单个场景，返回 Shot 列表。"""
     scene_id = scene.get("scene_id", 0)
@@ -141,6 +142,7 @@ def _process_one_scene(
         atmosphere=atmosphere,
         dialogue_text=dialogue_text,
         action=action,
+        shots_per_scene=shots_per_scene,
     )
     user_prompt += f"\n\n{consistency_context}"
 
@@ -182,7 +184,7 @@ class ShotGenerator:
     def __init__(self, max_workers: int = MAX_WORKERS) -> None:
         self.max_workers = max_workers
 
-    def generate(self, story: Story, scenes: list[dict[str, Any]]) -> Storyboard:
+    def generate(self, story: Story, scenes: list[dict[str, Any]], shots_per_scene: int = 5) -> Storyboard:
         """多线程并行生成所有场景的镜头。
 
         Parameters
@@ -191,6 +193,8 @@ class ShotGenerator:
             完整的故事对象（含角色、世界观等一致性信息）。
         scenes : list[dict]
             剧本场景列表。
+        shots_per_scene : int, optional
+            每个场景生成的镜头数（默认 5）。
 
         Returns
         -------
@@ -217,7 +221,7 @@ class ShotGenerator:
             for idx, scene in enumerate(scenes):
                 start_id = idx * shots_per_scene + 1
                 future = executor.submit(
-                    _process_one_scene, scene, consistency_context, start_id
+                    _process_one_scene, scene, consistency_context, start_id, shots_per_scene
                 )
                 futures[future] = idx
 
